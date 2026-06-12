@@ -85,6 +85,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.border
 
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.NavHost
+
 @OptIn(ExperimentalMaterial3Api::class)
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -102,7 +107,9 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val hazeState = rememberHazeState()
-            var currentScreen by remember { mutableStateOf(TestTags.SCREEN_MAIN) }
+            val navController = rememberNavController()
+            val navBackStackEntry by navController.currentBackStackEntryAsState()
+            val currentScreen = navBackStackEntry?.destination?.route ?: TestTags.SCREEN_MAIN
             
             val settingsState by settingsViewModel.settings.collectAsState()
             val darkTheme = when (settingsState.themeMode) {
@@ -218,7 +225,7 @@ class MainActivity : ComponentActivity() {
                                             state = hazeState,
                                             style = dev.chrisbanes.haze.HazeStyle(
                                                 tint = dev.chrisbanes.haze.HazeTint(androidx.compose.ui.graphics.Color.Transparent),
-                                                blurRadius = 30.dp
+                                                blurRadius = 40.dp
                                             )
                                         ) {
                                             progressive = HazeProgressive.verticalGradient(
@@ -227,7 +234,7 @@ class MainActivity : ComponentActivity() {
                                                 easing = androidx.compose.animation.core.FastOutSlowInEasing
                                             )
                                         }
-                                        .padding(bottom = 24.dp)
+                                        .padding(bottom = 64.dp)
                                 ) {
                                     TopAppBar(
                                         title = {
@@ -257,7 +264,7 @@ class MainActivity : ComponentActivity() {
                                             state = hazeState,
                                             style = dev.chrisbanes.haze.HazeStyle(
                                                 tint = dev.chrisbanes.haze.HazeTint(androidx.compose.ui.graphics.Color.Transparent),
-                                                blurRadius = 30.dp
+                                                blurRadius = 40.dp
                                             )
                                         ) {
                                             progressive = HazeProgressive.verticalGradient(
@@ -266,7 +273,7 @@ class MainActivity : ComponentActivity() {
                                                 easing = androidx.compose.animation.core.FastOutSlowInEasing
                                             )
                                         }
-                                        .padding(top = 24.dp)
+                                        .padding(top = 64.dp)
                                         .navigationBarsPadding()
                                         .padding(bottom = 20.dp, start = 24.dp, end = 24.dp)
                                 ) {
@@ -342,7 +349,13 @@ class MainActivity : ComponentActivity() {
                                                         indication = null,
                                                         onClick = {
                                                             navPressed = true
-                                                            currentScreen = screen
+                                                            if (currentScreen != screen) {
+                                                                navController.navigate(screen) {
+                                                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                                                    launchSingleTop = true
+                                                                    restoreState = true
+                                                                }
+                                                            }
                                                         }
                                                     ),
                                                 horizontalArrangement = Arrangement.Center,
@@ -378,26 +391,24 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                         ) { innerPadding ->
-                            val tabs = listOf(TestTags.SCREEN_MAIN, TestTags.SCREEN_BULK, TestTags.SCREEN_HISTORY, TestTags.SCREEN_SETTINGS)
-                            AnimatedContent(
-                                targetState = currentScreen,
+                            androidx.navigation.compose.NavHost(
+                                navController = navController,
+                                startDestination = TestTags.SCREEN_MAIN,
                                 modifier = Modifier.fillMaxSize(),
-                                transitionSpec = {
-                                    val targetIndex = tabs.indexOf(targetState)
-                                    val initialIndex = tabs.indexOf(initialState)
-                                    if (targetIndex > initialIndex) {
-                                        slideInHorizontally { width -> width } togetherWith slideOutHorizontally { width -> -width }
-                                    } else {
-                                        slideInHorizontally { width -> -width } togetherWith slideOutHorizontally { width -> width }
-                                    }
-                                },
-                                label = "ScreenTransition"
-                            ) { targetScreen ->
-                                when (targetScreen) {
-                                    TestTags.SCREEN_MAIN -> MainScreen(mainViewModel, innerPadding)
-                                    TestTags.SCREEN_BULK -> BulkScreen(bulkViewModel, innerPadding)
-                                    TestTags.SCREEN_HISTORY -> HistoryScreen(historyViewModel, innerPadding)
-                                    TestTags.SCREEN_SETTINGS -> SettingsScreen(settingsViewModel, innerPadding)
+                                enterTransition = { androidx.compose.animation.fadeIn() },
+                                exitTransition = { androidx.compose.animation.fadeOut() }
+                            ) {
+                                composable(TestTags.SCREEN_MAIN) {
+                                    MainScreen(mainViewModel, innerPadding)
+                                }
+                                composable(TestTags.SCREEN_BULK) {
+                                    BulkScreen(bulkViewModel, innerPadding)
+                                }
+                                composable(TestTags.SCREEN_HISTORY) {
+                                    HistoryScreen(historyViewModel, innerPadding)
+                                }
+                                composable(TestTags.SCREEN_SETTINGS) {
+                                    SettingsScreen(settingsViewModel, innerPadding)
                                 }
                             }
                         }
@@ -491,13 +502,17 @@ fun MainScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
             CircularProgressIndicator(modifier = Modifier.padding(8.dp))
         }
 
-        // Invisible button to keep E2E tests green
-        Box(
-            modifier = Modifier
-                .size(0.dp)
-                .testTag(TestTags.CLEAN_BUTTON)
-                .clickable { viewModel.cleanUrl() }
-        )
+        if (inputUrl.isNotEmpty() && !isResolving) {
+            Button(
+                onClick = { viewModel.cleanUrl() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(TestTags.CLEAN_BUTTON),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Clean URL")
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -568,7 +583,10 @@ fun MainScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
 
                     if (showQrCode) {
                         Spacer(modifier = Modifier.height(16.dp))
-                        val qrBitmap = remember(cleanedUrl) { generateQRCode(cleanedUrl) }
+                        var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                        LaunchedEffect(cleanedUrl) {
+                            qrBitmap = com.juntang2.unlink.util.QRUtil.generateQRCodeAsync(cleanedUrl)
+                        }
                         if (qrBitmap != null) {
                             Card(
                                 modifier = Modifier
@@ -588,7 +606,7 @@ fun MainScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Image(
-                                        bitmap = qrBitmap.asImageBitmap(),
+                                        bitmap = qrBitmap!!.asImageBitmap(),
                                         contentDescription = "QR Code",
                                         modifier = Modifier
                                             .size(200.dp)
@@ -596,7 +614,7 @@ fun MainScreen(viewModel: MainViewModel, contentPadding: PaddingValues) {
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Button(
-                                        onClick = { shareQRCode(context, qrBitmap) }
+                                        onClick = { com.juntang2.unlink.util.QRUtil.shareQRCode(context, qrBitmap!!) }
                                     ) {
                                         Text("Share QR Code")
                                     }
@@ -1481,43 +1499,4 @@ fun SettingsScreen(viewModel: SettingsViewModel, contentPadding: PaddingValues) 
     }
 }
 
-fun generateQRCode(text: String): Bitmap? {
-    return try {
-        val writer = QRCodeWriter()
-        val bitMatrix = writer.encode(text, BarcodeFormat.QR_CODE, 512, 512)
-        val width = bitMatrix.width
-        val height = bitMatrix.height
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565)
-        for (x in 0 until width) {
-            for (y in 0 until height) {
-                bitmap.setPixel(x, y, if (bitMatrix.get(x, y)) Color.BLACK else Color.WHITE)
-            }
-        }
-        bitmap
-    } catch (e: Exception) {
-        null
-    }
-}
-
-fun shareQRCode(context: Context, bitmap: Bitmap) {
-    try {
-        val file = File(context.cacheDir, "qr_code.png")
-        val stream = FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-        stream.flush()
-        stream.close()
-        val uri = FileProvider.getUriForFile(
-            context,
-            "com.juntang2.unlink.fileprovider",
-            file
-        )
-        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/png"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(shareIntent, "Share QR Code"))
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-}
+// Removed legacy QR logic
